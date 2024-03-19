@@ -1,22 +1,39 @@
 #include "MAX30105.h"
 #include "heartRate.h"
 #include <Adafruit_MLX90614.h>
+#include <Arduino.h>
+#include "HX711.h"
+#include "soc/rtc.h"
 
 long irValue;
 bool b = false;
 const byte RATE_SIZE = 4; //Increase this for more averaging. 4 is good.
 byte rates[RATE_SIZE]; //Array of heart rates
 byte rateSpot = 0;
-long lastBeat = 0; //Time at which the last beat occurred
+long lastBeat = 0;
 float beatsPerMinute;
 int beatAvg;
 
+#define trigPin 12
+#define echoPin 13
+#define LOADCELL_DOUT_PIN 16
+#define LOADCELL_SCK_PIN 4
+
+long duration;
+float distance, reading, lastReading, BMI;
+
+//REPLACE WITH YOUR CALIBRATION FACTOR
+#define CALIBRATION_FACTOR -471.497
+
 Adafruit_MLX90614 mlx = Adafruit_MLX90614();
 MAX30105 particleSensor;
+HX711 scale;
 
 void setup() {
-  Serial.begin(9600);
 
+  Serial.begin(9600);
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
   if (!mlx.begin()) {
     Serial.println("Error connecting to MLX sensor. Check wiring.");
     while (1);
@@ -32,11 +49,27 @@ void setup() {
   particleSensor.setPulseAmplitudeRed(0x0A); //Turn Red LED to low to indicate sensor is running
   particleSensor.setPulseAmplitudeGreen(0); //Turn off Green LED
 
+  rtc_cpu_freq_config_t config;
+  rtc_clk_cpu_freq_get_config(&config);
+  rtc_clk_cpu_freq_to_config(RTC_CPU_FREQ_80M, &config);
+  rtc_clk_cpu_freq_set_config_fast(&config);
+
+  Serial.println("Initializing the scale");
+  scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
+
+  scale.set_scale(CALIBRATION_FACTOR);
+  scale.tare();
+
 }
 
 void loop() {
-  max30102Read();
-  mlxRead();
+
+  //  max30102Read();
+  //  mlxRead();
+  hightRead();
+  scaleRead();
+  BMICAL();
+  delay(1000);
 
 }
 void max30102Read() {
@@ -97,4 +130,51 @@ void mlxRead() {
   Serial.print("Object temperature = ");
   Serial.print(mlx.readObjectTempC());
   Serial.println("°C");
+}
+void hightRead() {
+
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+  duration = pulseIn(echoPin, HIGH);
+  distance = duration * 0.034 / 2;
+  distance = distance / 100;
+
+  Serial.print("Distance M: ");
+  Serial.println(distance);
+}
+void scaleRead() {
+  if (scale.wait_ready_timeout(200)) {
+    reading = round(scale.get_units());
+    reading = reading / 1000;
+    if (reading != lastReading) {
+      Serial.print("Weight: ");
+      Serial.println(reading);
+    }
+    lastReading = reading;
+  }
+  else {
+    Serial.println("HX711 not found.");
+  }
+}
+void BMICAL() {
+  BMI = reading / (distance * distance);
+  Serial.print("BMI: ");
+  Serial.println(BMI);
+
+  if (BMI < 18.5) {
+    Serial.println("Under weight");
+  } else if (BMI > 18.5 && BMI < 24.9) {
+    Serial.println("Normal weight");
+  } else if (BMI > 25.0 && BMI < 29.9) {
+    Serial.println("Over weight");
+  } else if (BMI > 30.0 && BMI < 34.9) {
+    Serial.println("Obesity (Class 1)");
+  } else if (BMI > 35.0 && BMI < 39.9) {
+    Serial.println("Obesity (Class 2)");
+  } else if (BMI > 40) {
+    Serial.println("Obesity (Class 3)");
+  }
 }
